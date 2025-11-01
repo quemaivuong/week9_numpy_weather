@@ -1,0 +1,140 @@
+import numpy as np
+
+temps_celsius = [15, 18, 21, 20, 16, 19, 22]                 #Create a Python list
+temps = np.array(temps_celsius, dtype=float)                 #Convert to NumPy array
+
+highest = temps.max()
+lowest = temps.min()
+mean_temp = temps.mean()
+temps_fahrenheit = temps * 9/5 + 32
+days_above_20 = np.count_nonzero(temps > 20)
+
+print("Highest (°C):", highest)
+print("Lowest (°C):", lowest)
+print("Mean (°C):", mean_temp)
+print("Temperatures (°F):", temps_fahrenheit)
+print("Days > 20°C:", days_above_20)
+
+# --- Challenge: fetch forecast from an open public API (no API key required) and compute stats ---
+import sys
+import requests
+import argparse
+from typing import Optional, Tuple
+
+
+def geocode_city_nominatim(city: str, limit: int = 1, timeout: int = 10) -> Optional[Tuple[float, float]]:
+    """Use OpenStreetMap Nominatim to geocode a city name to (lat, lon).
+
+    Returns (lat, lon) as floats if found, otherwise None.
+    """
+    URL = "https://nominatim.openstreetmap.org/search"
+    params = {"q": city, "format": "json", "limit": limit}
+    headers = {"User-Agent": "week9-numpy-script/1.0 (student@example.com)"}
+
+    resp = requests.get(URL, params=params, headers=headers, timeout=timeout)
+    resp.raise_for_status()
+    results = resp.json()
+    if not results:
+        return None
+
+    first = results[0]
+    try:
+        lat = float(first["lat"])
+        lon = float(first["lon"])
+        return lat, lon
+    except (KeyError, ValueError):
+        return None
+
+
+def fetch_temps_open_meteo(lat: float, lon: float, hours: int = 24, timezone: str = "UTC"):
+    """Fetch hourly temperature (°C) from Open-Meteo for the given coordinates.
+
+    Returns a list of temperature values (floats). Raises requests.RequestException on network errors
+    and ValueError if expected fields are missing.
+    """
+    URL = "https://api.open-meteo.com/v1/forecast"
+    params = {
+        "latitude": lat,
+        "longitude": lon,
+        "hourly": "temperature_2m",
+        "timezone": timezone,
+    }
+
+    resp = requests.get(URL, params=params, timeout=10)
+    resp.raise_for_status()
+    data = resp.json()
+
+    if "hourly" not in data or "temperature_2m" not in data["hourly"]:
+        raise ValueError(f"Unexpected API response structure from Open-Meteo: keys={list(data.keys())}")
+
+    temps = data["hourly"]["temperature_2m"]
+    # Return the next `hours` measurements (or fewer if not available)
+    return temps[:hours]
+
+
+def compute_and_print_stats(temps_celsius, label: str):
+    if not temps_celsius:
+        print("No temperature entries found in API response.")
+        return
+
+    temps = np.array(temps_celsius, dtype=float)
+    highest = temps.max()
+    lowest = temps.min()
+    mean_temp = temps.mean()
+    temps_fahrenheit = temps * 9/5 + 32
+    measurements_above_20 = int(np.sum(temps > 20))
+
+    print(f"Source: {label}")
+    print("Highest (°C):", highest)
+    print("Lowest (°C):", lowest)
+    print("Mean (°C):", round(mean_temp, 2))
+    print("Measurements > 20°C:", measurements_above_20)
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Fetch hourly temperatures for a city (Open-Meteo) and compute stats.")
+    parser.add_argument("--city", "-c", help="City name to fetch (e.g. 'Hanoi' or 'San Francisco')")
+    parser.add_argument("--hours", "-n", type=int, default=24, help="Number of hours to retrieve (default 24)")
+    parser.add_argument("--timezone", "-t", default="UTC", help="Timezone for returned times (default UTC)")
+    return parser.parse_args()
+
+
+def main():
+    args = parse_args()
+
+    if args.city:
+        city_name = args.city
+    else:
+        # Prompt the user if not provided on the command line
+        try:
+            city_name = input("Enter city name (e.g. Hanoi): ").strip()
+        except EOFError:
+            sys.exit("No city provided and input not available.")
+
+    if not city_name:
+        sys.exit("No city name provided.")
+
+    print(f"Geocoding city: {city_name}")
+    try:
+        coords = geocode_city_nominatim(city_name)
+    except requests.RequestException as e:
+        sys.exit(f"Geocoding request failed: {e}")
+
+    if coords is None:
+        sys.exit(f"Could not find coordinates for city: {city_name}")
+
+    lat, lon = coords
+    print(f"Found coordinates: lat={lat}, lon={lon}")
+
+    try:
+        temps = fetch_temps_open_meteo(lat, lon, hours=args.hours, timezone=args.timezone)
+    except requests.RequestException as e:
+        sys.exit(f"Request failed: {e}")
+    except ValueError as e:
+        sys.exit(str(e))
+
+    compute_and_print_stats(temps, f"Open-Meteo ({city_name})")
+
+
+if __name__ == "__main__":
+    main()
